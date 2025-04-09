@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 import OSLog
+import Combine
 
 /// Similar to UserDefaults, but does not use disk encryption so files are more readily accessible.
 ///
@@ -42,6 +43,9 @@ public final class TinyStorage: @unchecked Sendable {
     public var allKeys: [any TinyStorageKey] {
         dispatchQueue.sync { return Array(dictionaryRepresentation.keys) }
     }
+    
+    /// Subjects for each key that can broadcast specific value changes.
+    private var subjects: [String: PassthroughSubject<(any Codable)?, Never>] = [:]
     
     /// Initialize an instance of `TinyStorage` for you to use.
     ///
@@ -158,11 +162,13 @@ public final class TinyStorage: @unchecked Sendable {
                 dictionaryRepresentation[key.rawValue] = valueData
                 
                 storeToDisk()
+                subjects[key.rawValue]?.send(value)
             }
         } else {
             dispatchQueue.sync {
                 dictionaryRepresentation.removeValue(forKey: key.rawValue)
                 storeToDisk()
+                subjects[key.rawValue]?.send(nil)
             }
         }
         
@@ -526,6 +532,7 @@ public final class TinyStorage: @unchecked Sendable {
         var actualChangeOccurred = false
         
         dispatchQueue.sync {
+            
             let newDictionaryRepresentation = TinyStorage.retrieveStorageDictionary(directoryURL: directoryURL, fileURL: fileURL, logger: logger) ?? [:]
             
             // Ensure something actually changed
@@ -537,6 +544,7 @@ public final class TinyStorage: @unchecked Sendable {
         
         if actualChangeOccurred {
             NotificationCenter.default.post(name: Self.didChangeNotification, object: self, userInfo: nil)
+            print("File changed event occurred, notifying all observers")
         }
     }
     
@@ -744,7 +752,36 @@ public final class TinyStorage: @unchecked Sendable {
             assertionFailure()
         }
     }
+    
+    
+    /// Retrieve a publisher for a specific key.
+    /// - Will create a new publisher if one does not already exist.
+    func publisher<T>(for key: any TinyStorageKey) -> AnyPublisher<T, Never> {
+        // Lazily create a subject for the key if needed.
+        if subjects[key.rawValue] == nil {
+            subjects[key.rawValue] = PassthroughSubject<(any Codable)?, Never>()
+        }
+        // The publisher will try to convert the value to type T.
+        return subjects[key.rawValue]!
+            .compactMap { $0 as? T }
+            .eraseToAnyPublisher()
+    }
 }
+
+
+/// This serves as a observable object which forces a render update on any view with `TinyStorageItem` when its value changes.
+private class TinyStorageItemNotifier<T: Codable & Sendable>: ObservableObject {
+    @Published var shouldUpdateFlag = false /// Hackey way to
+    var subscription: AnyCancellable?
+    
+    init(storage: TinyStorage, key: any TinyStorageKey) {
+        subscription = storage.publisher(for: key)
+            .sink { (newValue: T) in
+                self.shouldUpdateFlag.toggle()
+            }
+    }
+}
+
 
 public protocol TinyStorageKey: Hashable, Sendable {
     var rawValue: String { get }
@@ -756,15 +793,17 @@ extension String: TinyStorageKey {
 
 @propertyWrapper
 public struct TinyStorageItem<T: Codable & Sendable>: DynamicProperty, Sendable {
-    @State private var storage: TinyStorage
-    
+    @StateObject private var coordinator: TinyStorageItemNotifier<T>
+    private let storage: TinyStorage
     private let key: any TinyStorageKey
     private let defaultValue: T
     
+    
     public init(wrappedValue: T, _ key: any TinyStorageKey, storage: TinyStorage) {
         self.defaultValue = wrappedValue
-        self.storage = storage
+        self._coordinator = StateObject(wrappedValue: TinyStorageItemNotifier(storage: storage, key: key))
         self.key = key
+        self.storage = storage
     }
     
     public var wrappedValue: T {
