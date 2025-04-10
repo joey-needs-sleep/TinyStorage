@@ -45,7 +45,7 @@ public final class TinyStorage: @unchecked Sendable {
     }
     
     /// Subjects for each key that can broadcast specific value changes.
-    private var subjects: [String: PassthroughSubject<(any Codable)?, Never>] = [:]
+    private var subjects: [String: PassthroughSubject<Void, Never>] = [:]
     
     /// Initialize an instance of `TinyStorage` for you to use.
     ///
@@ -162,13 +162,13 @@ public final class TinyStorage: @unchecked Sendable {
                 dictionaryRepresentation[key.rawValue] = valueData
                 
                 storeToDisk()
-                subjects[key.rawValue]?.send(value)
+                subjects[key.rawValue]?.send()
             }
         } else {
             dispatchQueue.sync {
                 dictionaryRepresentation.removeValue(forKey: key.rawValue)
                 storeToDisk()
-                subjects[key.rawValue]?.send(nil)
+                subjects[key.rawValue]?.send()
             }
         }
         
@@ -545,6 +545,9 @@ public final class TinyStorage: @unchecked Sendable {
         if actualChangeOccurred {
             NotificationCenter.default.post(name: Self.didChangeNotification, object: self, userInfo: nil)
             print("File changed event occurred, notifying all observers")
+            for (_, subject) in self.subjects {
+                subject.send()
+            }
         }
     }
     
@@ -759,7 +762,7 @@ public final class TinyStorage: @unchecked Sendable {
     func publisher<T>(for key: any TinyStorageKey) -> AnyPublisher<T, Never> {
         // Lazily create a subject for the key if needed.
         if subjects[key.rawValue] == nil {
-            subjects[key.rawValue] = PassthroughSubject<(any Codable)?, Never>()
+            subjects[key.rawValue] = PassthroughSubject<Void, Never>()
         }
         // The publisher will try to convert the value to type T.
         return subjects[key.rawValue]!
@@ -776,7 +779,7 @@ private class TinyStorageItemNotifier<T: Codable & Sendable>: ObservableObject {
     
     init(storage: TinyStorage, key: any TinyStorageKey) {
         subscription = storage.publisher(for: key)
-            .sink { (newValue: T) in
+            .sink {
                 self.shouldUpdateFlag.toggle()
             }
     }
