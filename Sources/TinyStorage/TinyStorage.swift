@@ -147,6 +147,7 @@ public final class TinyStorage: @unchecked Sendable {
     ///   - value: The `Codable`-conforming instance to store.
     ///   - key: The key that the value will be stored at.
     public func storeOrThrow(_ value: Codable?, forKey key: any TinyStorageKey) throws {
+        
         if let value {
             // Encode the Codable object back to Data before storing in memory and on disk
             let valueData: Data
@@ -159,16 +160,23 @@ public final class TinyStorage: @unchecked Sendable {
             }
             
             dispatchQueue.sync {
-                dictionaryRepresentation[key.rawValue] = valueData
+                let existingValue: Data? = dictionaryRepresentation[key.rawValue]
                 
-                storeToDisk()
-                subjects[key.rawValue]?.send()
+                if existingValue != valueData {
+                    dictionaryRepresentation[key.rawValue] = valueData
+                    
+                    storeToDisk()
+                    subjects[key.rawValue]?.send()
+                }
             }
         } else {
             dispatchQueue.sync {
-                dictionaryRepresentation.removeValue(forKey: key.rawValue)
-                storeToDisk()
-                subjects[key.rawValue]?.send()
+                let existingValue: Data? = dictionaryRepresentation[key.rawValue]
+                if existingValue != nil {
+                    dictionaryRepresentation.removeValue(forKey: key.rawValue)
+                    storeToDisk()
+                    subjects[key.rawValue]?.send()
+                }
             }
         }
         
@@ -223,6 +231,11 @@ public final class TinyStorage: @unchecked Sendable {
             logger.error("Unable to remove storage file")
             assertionFailure()
             return
+        }
+        
+        //remove the internal representation
+        dispatchQueue.sync {
+            dictionaryRepresentation = [:]
         }
         
         NotificationCenter.default.post(name: Self.didChangeNotification, object: self, userInfo: nil)
@@ -759,14 +772,12 @@ public final class TinyStorage: @unchecked Sendable {
     
     /// Retrieve a publisher for a specific key.
     /// - Will create a new publisher if one does not already exist.
-    func publisher<T>(for key: any TinyStorageKey) -> AnyPublisher<T, Never> {
+    func publisher(for key: any TinyStorageKey) -> AnyPublisher<Void, Never> {
         // Lazily create a subject for the key if needed.
         if subjects[key.rawValue] == nil {
             subjects[key.rawValue] = PassthroughSubject<Void, Never>()
         }
-        // The publisher will try to convert the value to type T.
         return subjects[key.rawValue]!
-            .compactMap { $0 as? T }
             .eraseToAnyPublisher()
     }
 }
@@ -780,6 +791,7 @@ private class TinyStorageItemNotifier<T: Codable & Sendable>: ObservableObject {
     init(storage: TinyStorage, key: any TinyStorageKey) {
         subscription = storage.publisher(for: key)
             .sink {
+//                only update when the app is in the foreground
                 self.shouldUpdateFlag.toggle()
             }
     }

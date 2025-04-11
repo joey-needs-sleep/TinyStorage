@@ -19,5 +19,9 @@ type: .dynamic,
             name: "TinyStorage",
             dependencies: []
         ),
+        .testTarget(
+            name: "TinyStorageTests",
+            dependencies: ["TinyStorage"]
+        )
     ]
 )
