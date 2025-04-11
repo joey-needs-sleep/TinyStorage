@@ -9,6 +9,12 @@ import Foundation
 import SwiftUI
 import OSLog
 import Combine
+#if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst)
+import UIKit
+#endif
+#if os(macOS)
+import AppKit
+#endif
 
 /// Similar to UserDefaults, but does not use disk encryption so files are more readily accessible.
 ///
@@ -783,17 +789,61 @@ public final class TinyStorage: @unchecked Sendable {
 }
 
 
-/// This serves as a observable object which forces a render update on any view with `TinyStorageItem` when its value changes.
+/// This serves as an observable object which forces a render update on any view with `TinyStorageItem` when its value changes. It  ignores updates when the app is in the background and queues them to trigger upon foregrounding due to ios terminating the app if we try to update the UI while in the background.
+@MainActor
 private class TinyStorageItemNotifier<T: Codable & Sendable>: ObservableObject {
-    @Published var shouldUpdateFlag = false /// Hackey way to
+    @Published var shouldUpdateFlag = false
     var subscription: AnyCancellable?
+    var notificationSubscription: AnyCancellable?
     
+    /// If an update comes in while the app is in background, this flag is set so when foregrounded the update is applied
+    private var pendingUpdate = false
+
     init(storage: TinyStorage, key: any TinyStorageKey) {
+        // Subscribe to storage updates
         subscription = storage.publisher(for: key)
-            .sink {
-//                only update when the app is in the foreground
-                self.shouldUpdateFlag.toggle()
+            .sink { [weak self] in
+                guard let self = self else { return }
+                if Self.isAppActive {
+                    // App is active so update immediately
+                    self.shouldUpdateFlag.toggle()
+                } else {
+                    // App is in background; queue the update
+                    self.pendingUpdate = true
+                }
             }
+        
+        // Subscribe to app did become active notifications to process queued updates
+        #if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst)
+        notificationSubscription = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                self?.processAppBecameActive()
+            }
+        #elseif os(macOS)
+        notificationSubscription = NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                self?.processAppBecameActive()
+            }
+        #endif
+    }
+    
+    /// Determines whether the app is currently active on supported Apple platforms
+    static var isAppActive: Bool {
+        #if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst)
+        return UIApplication.shared.applicationState == .active
+        #elseif os(macOS)
+        return NSApplication.shared.isActive
+        #else
+        return true
+        #endif
+    }
+    
+    /// Called when the app moves to the foreground. If there was an update queued in background, toggle the flag.
+    private func processAppBecameActive() {
+        if pendingUpdate {
+            self.shouldUpdateFlag.toggle()
+            pendingUpdate = false
+        }
     }
 }
 
@@ -807,6 +857,7 @@ extension String: TinyStorageKey {
 }
 
 @propertyWrapper
+@MainActor
 public struct TinyStorageItem<T: Codable & Sendable>: DynamicProperty, Sendable {
     @StateObject private var coordinator: TinyStorageItemNotifier<T>
     private let storage: TinyStorage
