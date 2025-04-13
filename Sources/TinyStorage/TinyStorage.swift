@@ -860,7 +860,7 @@ extension String: TinyStorageKey {
 @MainActor
 public struct TinyStorageItem<T: Codable & Sendable>: DynamicProperty, Sendable {
     @StateObject private var coordinator: TinyStorageItemNotifier<T>
-    private let storage: TinyStorage
+    @ObservationIgnored private let storage: TinyStorage
     private let key: any TinyStorageKey
     private let defaultValue: T
     
@@ -884,3 +884,6 @@ public struct TinyStorageItem<T: Codable & Sendable>: DynamicProperty, Sendable 
         )
     }
 }
+
+
+
