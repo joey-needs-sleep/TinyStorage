@@ -810,21 +810,22 @@ private class TinyStorageItemNotifier<T: Codable & Sendable>: ObservableObject {
                 } else {
                     // App is in background; queue the update
                     self.pendingUpdate = true
+                    // Subscribe to app did become active notifications to process queued updates
+                    #if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst)
+                    notificationSubscription = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+                        .sink { [weak self] _ in
+                            self?.processAppBecameActive()
+                        }
+                    #elseif os(macOS)
+                    notificationSubscription = NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+                        .sink { [weak self] _ in
+                            self?.processAppBecameActive()
+                        }
+                    #endif
                 }
             }
         
-        // Subscribe to app did become active notifications to process queued updates
-        #if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst)
-        notificationSubscription = NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
-            .sink { [weak self] _ in
-                self?.processAppBecameActive()
-            }
-        #elseif os(macOS)
-        notificationSubscription = NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
-            .sink { [weak self] _ in
-                self?.processAppBecameActive()
-            }
-        #endif
+       
     }
     
     /// Determines whether the app is currently active on supported Apple platforms
