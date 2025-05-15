@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "TinyStorage",
-    platforms: [.iOS(.v17), .tvOS(.v17), .visionOS(.v1), .watchOS(.v10), .macOS(.v14)],
+    platforms: [.iOS(.v18), .tvOS(.v18), .visionOS(.v2), .watchOS(.v11), .macOS(.v15)],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
