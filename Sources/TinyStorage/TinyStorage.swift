@@ -804,7 +804,7 @@ public final class TinyStorage: Sendable {
     /// Retrieve a publisher for a specific key.
     /// - Will create a new publisher if one does not already exist.
     func publisher(for key: any TinyStorageKey) -> AnyPublisher<Void, Never> {
-        subjects.withLock { subjects in
+        return subjects.withLock { subjects in
             // Lazily create a subject for the key if needed.
             if subjects[key.rawValue] == nil {
                 subjects[key.rawValue] = PassthroughSubject<Void, Never>()
@@ -818,7 +818,7 @@ public final class TinyStorage: Sendable {
 
 /// This serves as an observable object which forces a render update on any view with `TinyStorageItem` when its value changes. It  ignores updates when the app is in the background and queues them to trigger upon foregrounding due to ios terminating the app if we try to update the UI while in the background.
 @MainActor
-private class TinyStorageItemNotifier<T: Codable & Sendable>: ObservableObject {
+internal class TinyStorageItemNotifier<T: Codable & Sendable>: ObservableObject {
     @Published var shouldUpdateFlag = false
     var subscription: AnyCancellable?
     var notificationSubscription: AnyCancellable?
@@ -886,8 +886,8 @@ extension String: TinyStorageKey {
 
 @propertyWrapper
 @MainActor
-public struct TinyStorageItem<T: Codable & Sendable>: DynamicProperty, Sendable {
-    @StateObject private var coordinator: TinyStorageItemNotifier<T>
+public struct TinyStorageItem<T: Codable & Sendable>: @preconcurrency DynamicProperty, Sendable {
+    @ObservedObject private var coordinator: TinyStorageItemNotifier<T>
     @ObservationIgnored private let storage: TinyStorage
     private let key: any TinyStorageKey
     private let defaultValue: T
@@ -895,14 +895,19 @@ public struct TinyStorageItem<T: Codable & Sendable>: DynamicProperty, Sendable 
     
     public init(wrappedValue: T, _ key: any TinyStorageKey, storage: TinyStorage) {
         self.defaultValue = wrappedValue
-        self._coordinator = StateObject(wrappedValue: TinyStorageItemNotifier(storage: storage, key: key))
+//        self._coordinator = StateObject(wrappedValue: TinyStorageItemNotifier(storage: storage, key: key))
+        let notifier = TinyStorageItemNotifier<T>(storage: storage, key: key)
+        self._coordinator = ObservedObject(wrappedValue: notifier)
         self.key = key
         self.storage = storage
     }
     
     public var wrappedValue: T {
         get { storage.retrieve(type: T.self, forKey: key) ?? defaultValue }
-        nonmutating set { storage.store(newValue, forKey: key) }
+        nonmutating set {
+            coordinator.shouldUpdateFlag.toggle()
+            storage.store(newValue, forKey: key)
+        }
     }
     
     public var projectedValue: Binding<T> {
@@ -911,7 +916,52 @@ public struct TinyStorageItem<T: Codable & Sendable>: DynamicProperty, Sendable 
             set: { wrappedValue = $0 }
         )
     }
+//    @MainActor
+//    public mutating func update() { } // satisfy DynamicProperty
+
 }
 
-
-
+//
+//
+//// MARK: — Automatic forwarding when you use it in an ObservableObject
+//extension TinyStorageItem {
+//    /// getter/setter for `foo: T` on any EnclosingSelf: ObservableObject
+//    public static subscript<
+//         EnclosingSelf: ObservableObject & AnyObject
+//       >(
+//         _enclosingInstance host: EnclosingSelf,
+//         wrapped wrappedKeyPath: ReferenceWritableKeyPath<EnclosingSelf, T>,
+//         storage storageKeyPath: ReferenceWritableKeyPath<EnclosingSelf, TinyStorageItem<T>>
+//       ) -> T
+//        where EnclosingSelf.ObjectWillChangePublisher == ObservableObjectPublisher
+//       {
+//        get {
+//            host[keyPath: storageKeyPath].wrappedValue
+//        }
+//        set {
+//            let item = host[keyPath: storageKeyPath]
+//            item.wrappedValue = newValue
+////            item.update()
+//            host.objectWillChange.send()
+//        }
+//    }
+//
+//    /// `$foo` on an ObservableObject host becomes a bound Binding<T> that also
+//    /// forwards into host.objectWillChange
+//    public static subscript<EnclosingSelf: ObservableObject>(
+//      _enclosingInstance host: EnclosingSelf,
+//      projected projectedKeyPath: KeyPath<EnclosingSelf, Binding<T>>,
+//      storage storageKeyPath: ReferenceWritableKeyPath<EnclosingSelf, TinyStorageItem<T>>
+//    ) -> Binding<T> where EnclosingSelf.ObjectWillChangePublisher == ObservableObjectPublisher {
+//        get {
+//            let item = host[keyPath: storageKeyPath]
+//            return Binding(
+//              get: { item.wrappedValue },
+//              set: { new in
+//                  item.wrappedValue = new
+//                host.objectWillChange.send()
+//              }
+//            )
+//        }
+//    }
+//}

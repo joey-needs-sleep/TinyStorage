@@ -7,11 +7,15 @@
 
 import XCTest
 import Foundation
+import SwiftUI
 @testable import TinyStorage
+
 
 struct TestObject: Codable, Equatable {
     let value: Int
 }
+
+
 
 class TinyStorageTests: XCTestCase {
     
@@ -246,5 +250,17 @@ class TinyStorageTests: XCTestCase {
         cancellable.cancel()
     }
 
+    @MainActor func testSwiftUINotifier(){
+        let someUnusedKey = "someUnusedKey"
+        let observedObject = TinyStorageItemNotifier<String>(storage: storage, key: someUnusedKey)
+        XCTAssertFalse(observedObject.shouldUpdateFlag)
+        
+        //update it
+        storage.store("someValue", forKey: someUnusedKey)
+        XCTAssertTrue(observedObject.shouldUpdateFlag)
+        
+    }
     
 }
+
+    
